@@ -8,7 +8,10 @@
 String s_client_id;
 
 WiFiClient s_wifi_client;
+uint32_t s_last_wifi_connect_attempt_tp = 0;
+
 PubSubClient s_mqtt_client(s_wifi_client);
+uint32_t s_last_mqtt_connect_attempt_tp = 0;
 
 #define NODE_LOCATION "home"
 #define NODE_TYPE "ikea_led"
@@ -162,13 +165,15 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 void reconnect_mqtt() 
 {
   // Loop until we're reconnected
-  while (!s_mqtt_client.connected()) 
+  if (!s_mqtt_client.connected() && (s_last_mqtt_connect_attempt_tp + 30000 < millis()) || s_last_mqtt_connect_attempt_tp == 0) 
   {
+    s_last_mqtt_connect_attempt_tp = millis();
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
     if (s_mqtt_client.connect(s_client_id.c_str(), MQTT_USERNAME, MQTT_PASSWORD)) 
     {
       Serial.println("connected");
+      s_last_mqtt_connect_attempt_tp = 0;
 
       // Once connected, publish an announcement...
       mqtt_publish(s_status_topic, s_status);
@@ -182,33 +187,46 @@ void reconnect_mqtt()
       Serial.print("failed, rc=");
       Serial.print(s_mqtt_client.state());
       Serial.println(" try again");
-      // Wait 5 seconds before retrying
-      delay(1000);
     }
   }
 }
 
-void setup_wifi() {
-
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(WLAN_SSID);
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WLAN_SSID, WLAN_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) 
+void setup_wifi(bool wait) 
+{
+  if (WiFi.status() != WL_CONNECTED && (s_last_wifi_connect_attempt_tp + 30000 < millis() || s_last_wifi_connect_attempt_tp == 0))
   {
-    delay(500);
-    Serial.print(".");
+    delay(10);
+    // We start by connecting to a WiFi network
+    Serial.println();
+    Serial.print("Connecting to ");
+    Serial.println(WLAN_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WLAN_SSID, WLAN_PASSWORD);
+    s_last_wifi_connect_attempt_tp = millis();
   }
 
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  if (wait)
+  {
+    int start = millis();
+    while (WiFi.status() != WL_CONNECTED && start + 5000 > millis())
+    {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("");
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    s_last_wifi_connect_attempt_tp = 0;
+    Serial.println("WiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+  else
+  {
+    Serial.println("WiFi NOT connected, postponed");
+  }
 }  
 
 void setup() 
@@ -233,7 +251,7 @@ void setup()
 
   pinMode(k_button_pin, INPUT_PULLUP);
 
-  setup_wifi();
+  setup_wifi(true);
   s_mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
   s_mqtt_client.setCallback(mqtt_callback);
 
@@ -354,15 +372,14 @@ void process_mqtt()
   {
     delay(1);
     Serial.print("WIFI Disconnected. Attempting reconnection.");
-    setup_wifi();
+    setup_wifi(false);
     return;
   }
   
   if (!s_mqtt_client.connected()) 
-  {
     reconnect_mqtt();
-  }
-  s_mqtt_client.loop();
+  else
+    s_mqtt_client.loop();
 }
 
  
